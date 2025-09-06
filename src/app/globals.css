@@ -1,0 +1,11 @@
+@import "tailwindcss/preflight";
+@import "tailwindcss/utilities";
+
+html,
+body,
+:root {
+  height: 100%;
+}
+body {
+  @apply bg-neutral-50 text-neutral-900;
+}
