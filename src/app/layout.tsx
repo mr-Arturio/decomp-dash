@@ -1,10 +1,13 @@
 import "./globals.css";
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
+
+export const viewport: Viewport = {
+  themeColor: "#10b981",
+};
 
 export const metadata: Metadata = {
   title: "Decomp Dash",
   description: "Scan → classify → save centuries of decomposition time",
-  themeColor: "#10b981",
   manifest: "/manifest.webmanifest",
 };
 
@@ -14,8 +17,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen">
+    <html lang="en" suppressHydrationWarning>
+      <body
+        className="min-h-screen bg-neutral-50 text-neutral-900"
+        suppressHydrationWarning
+      >
         <div className="max-w-3xl mx-auto p-4 space-y-4">
           <header className="flex items-center justify-between">
             <h1 className="text-2xl font-bold">Decomp Dash</h1>
