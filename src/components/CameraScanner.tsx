@@ -14,6 +14,16 @@ import { db, ensureAnonAuth } from "../lib/firebase";
 type BinTag = { teamId: string; binId: string };
 type Pred = { className: string; probability: number };
 
+type MapResult = {
+  material: string;
+  bin: string;
+  tip: string;
+  years: number;
+  risk_score?: number;
+  _mode?: "llm" | "heuristic";
+  _model?: string;
+};
+
 export default function CameraScanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -30,6 +40,9 @@ export default function CameraScanner() {
     ahash: string;
     confidence: number;
     tip: string;
+    _mode?: "llm" | "heuristic";
+    _model?: string;
+    risk_score?: number;
   }>(null);
 
   // QR + motion tracking
@@ -45,7 +58,6 @@ export default function CameraScanner() {
   >(new Map());
 
   useEffect(() => {
-    // Cleanup on unmount
     return () => stopSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -130,7 +142,10 @@ export default function CameraScanner() {
         ) {
           const parts = qr.data.split(":");
           if (parts.length >= 3) {
-            setBinTag({ teamId: parts[1], binId: parts[2] });
+            const tag = { teamId: parts[1], binId: parts[2] };
+            setBinTag(tag);
+            localStorage.setItem("dd:lastTeamId", tag.teamId);
+            localStorage.setItem("dd:lastBinId", tag.binId);
             lastQRSeenAtRef.current = now;
           }
         } else {
@@ -166,13 +181,7 @@ export default function CameraScanner() {
     recentCount: number,
     delta: number,
     conf: number
-  ): Promise<{
-    material: string;
-    bin: string;
-    tip: string;
-    years: number;
-    risk_score?: number;
-  }> {
+  ): Promise<MapResult> {
     try {
       const r = await fetch("/api/map", {
         method: "POST",
@@ -186,15 +195,21 @@ export default function CameraScanner() {
           meta: { recentCount, delta, conf },
         }),
       });
-      if (r.ok) return (await r.json()) as any;
+      if (r.ok) {
+        const data = (await r.json()) as MapResult;
+        // attach server hint headers
+        data._mode = (r.headers.get("x-map-mode") as any) || "heuristic";
+        data._model = r.headers.get("x-map-model") || "";
+        return data;
+      }
     } catch {
       // ignore -> fallback below
     }
-    // Fallback
+    // Fallback (client-side heuristic)
     const top = preds[0]?.className || "";
     const material = labelToMaterial(top);
     const { bin, years, tip } = scoreFor(material);
-    return { material, bin, tip, years };
+    return { material, bin, tip, years, _mode: "heuristic", _model: "" };
   }
 
   async function captureAndRecord() {
@@ -256,10 +271,8 @@ export default function CameraScanner() {
 
       const material = mapped.material;
       const { bin, years, tip } = mapped;
-      const points = Math.round(
-        Math.round(years) *
-          (1 - 0.5 * Math.max(0, Math.min(1, mapped.risk_score ?? 0)))
-      );
+      const risk = Math.max(0, Math.min(1, mapped.risk_score ?? 0));
+      const points = Math.round(Math.round(years) * (1 - 0.5 * risk));
 
       const uid = await ensureAnonAuth();
       await addDoc(collection(db, "scans"), {
@@ -267,13 +280,16 @@ export default function CameraScanner() {
         teamId: binTag.teamId,
         binId: binTag.binId,
         ts: serverTimestamp(),
-        label: predictedLabel, 
+        label: predictedLabel,
         material,
         confidence,
         binSuggested: bin,
         years: Math.round(years),
         ahash,
         points,
+        llmMode: mapped._mode || "heuristic",
+        llmModel: mapped._model || "",
+        risk_score: risk,
       });
 
       // Update recent trackers
@@ -291,6 +307,9 @@ export default function CameraScanner() {
         ahash,
         confidence,
         tip,
+        _mode: mapped._mode,
+        _model: mapped._model,
+        risk_score: risk,
       });
     } finally {
       setBusy(false);
@@ -343,24 +362,57 @@ export default function CameraScanner() {
         {busy ? "Scanning…" : "Capture & Save"}
       </button>
 
+      {/* Unknown material banner */}
+      {result?.material === "unknown" && (
+        <div className="card p-3 bg-amber-50 border-amber-200">
+          <div className="text-sm text-amber-800">
+            Not recyclable/compostable here — please use landfill. (Check tip
+            below.)
+          </div>
+        </div>
+      )}
+
       {result && (
         <div className="card p-4 space-y-2">
-          <div className="text-sm text-neutral-500">Prediction</div>
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-neutral-500">Prediction</div>
+            <div className="flex gap-2">
+              {result._mode === "llm" ? (
+                <span className="chip">AI: {result._model || "LLM"}</span>
+              ) : (
+                <span className="chip bg-amber-100 text-amber-700">
+                  Offline rules
+                </span>
+              )}
+            </div>
+          </div>
+
           <div className="text-lg font-semibold">
             {result.label} <span className="text-neutral-400">→</span>{" "}
             <span className="uppercase font-mono">{result.material}</span>
           </div>
+
           <div className="flex flex-wrap gap-2 text-sm">
             <span className="chip">
               Bin: <b className="ml-1">{result.bin}</b>
             </span>
             <span className="chip">
-              Saved: <b className="ml-1">{result.years.toLocaleString()} yrs</b>
+              Saved:{" "}
+              <b className="ml-1">
+                {Math.round(result.years).toLocaleString()} yrs
+              </b>
             </span>
             <span className="chip">
               Points: <b className="ml-1">{result.points}</b>
             </span>
+            {typeof result.risk_score === "number" &&
+              result.risk_score > 0.6 && (
+                <span className="chip bg-amber-100 text-amber-700">
+                  High risk
+                </span>
+              )}
           </div>
+
           <p className="text-neutral-600 text-sm">
             Tip:{" "}
             {result.tip ??
