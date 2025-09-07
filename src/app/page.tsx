@@ -8,18 +8,26 @@ export default function Page() {
   }, []);
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-xl font-semibold">Welcome</h2>
-      <p>
-        Snap an item, we tell you the right bin and convert its decomposition
-        time into points. Use a BinTag QR on your bin to keep it honest.
+    <section className="card p-4 sm:p-6">
+      <div className="h-3 rounded bg-emerald-500" />
+
+      <div className="flex items-center gap-2 mb-2">
+        <span className="chip">Eco</span>
+        <span className="chip">PWA</span>
+      </div>
+      <h2 className="text-xl sm:text-2xl font-semibold">
+        Scan it. Sort it. Save centuries.
+      </h2>
+      <p className="mt-2 text-neutral-600">
+        Show your bin’s QR (“BinTag”) and the item together. We pick the correct
+        bin and turn avoided decomposition years into points.
       </p>
-      <div className="flex gap-3">
-        <a className="px-4 py-2 bg-black text-white rounded" href="/scan">
+      <div className="mt-4 flex gap-2">
+        <a className="btn-primary w-full" href="/scan">
           Start Scanning
         </a>
-        <a className="px-4 py-2 border rounded" href="/team">
-          Create/Join Team
+        <a className="btn-outline w-full" href="/team">
+          Create Team
         </a>
       </div>
     </section>

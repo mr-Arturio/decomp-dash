@@ -271,54 +271,70 @@ export default function CameraScanner() {
 
   return (
     <div className="space-y-3">
-      <div className="relative">
-        <video
-          ref={videoRef}
-          className="w-full rounded border bg-black"
-          playsInline
-          muted
-        />
-        <canvas ref={canvasRef} className="hidden" />
-        <div className="absolute inset-x-0 top-2 text-center text-xs bg-black/40 text-white py-1">
-          {binTag
-            ? `BinTag detected: ${binTag.teamId.slice(
-                0,
-                6
-              )}…/${binTag.binId.slice(0, 6)}…`
-            : "Show your BinTag QR in frame"}
+      <div className="card overflow-hidden">
+        <div className="relative">
+          <video
+            ref={videoRef}
+            className="w-full aspect-[3/4] object-cover bg-neutral-900"
+            playsInline
+            muted
+          />
+          <canvas ref={canvasRef} className="hidden" />
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/40 to-transparent" />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/40 to-transparent" />
+          <div className="absolute left-3 top-3">
+            <span className="chip bg-white/90 text-neutral-800">
+              {binTag ? "BinTag detected" : "Show your BinTag QR"}
+            </span>
+          </div>
         </div>
       </div>
+
       <div className="flex gap-2">
         <button
           onClick={startSession}
-          disabled={sessionActive}
-          className="px-3 py-2 rounded border"
+          disabled={!binTag || sessionActive}
+          className="btn-outline w-1/2"
         >
           {sessionActive ? "Session running…" : "Start 90s Session"}
         </button>
         <button
           disabled={!sessionActive || !binTag || busy}
           onClick={captureAndRecord}
-          className="px-4 py-2 rounded bg-emerald-600 text-white disabled:opacity-50"
+          className="btn-primary w-1/2 disabled:opacity-50"
         >
           {busy ? "Scanning…" : "Capture & Save"}
         </button>
       </div>
+
       {result && (
-        <ScoreCard
-          label={result.label}
-          material={result.material}
-          bin={result.bin}
-          years={result.years}
-          points={result.points}
-          tip={result.tip}
-        />
+        <div className="card p-4 space-y-2">
+          <div className="text-sm text-neutral-500">Prediction</div>
+          <div className="text-lg font-semibold">
+            {result.label} <span className="text-neutral-400">→</span>{" "}
+            <span className="uppercase font-mono">{result.material}</span>
+          </div>
+          <div className="flex flex-wrap gap-2 text-sm">
+            <span className="chip">
+              Bin: <b className="ml-1">{result.bin}</b>
+            </span>
+            <span className="chip">
+              Saved: <b className="ml-1">{result.years.toLocaleString()} yrs</b>
+            </span>
+            <span className="chip">
+              Points: <b className="ml-1">{result.points}</b>
+            </span>
+          </div>
+          <p className="text-neutral-600 text-sm">
+            Tip:{" "}
+            {(result as any).tip ??
+              "Rinse/flatten when possible to reduce contamination."}
+          </p>
+          <p className="text-xs text-neutral-500">
+            Privacy: on-device vision; only a perceptual hash + label is stored.
+          </p>
+        </div>
       )}
-      <p className="text-xs text-neutral-500">
-        Privacy: images are processed client‑side; only a perceptual hash +
-        label is saved. LLM receives only labels + simple metadata, not your
-        image.
-      </p>
     </div>
   );
 }

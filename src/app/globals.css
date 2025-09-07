@@ -1,8 +1,27 @@
-@import "tailwindcss/preflight";
-@import "tailwindcss/utilities";
+﻿@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 html,
 body,
 :root {
   height: 100%;
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition;
+  }
+  .btn-primary {
+    @apply btn bg-emerald-600 text-white hover:bg-emerald-700 shadow;
+  }
+  .btn-outline {
+    @apply btn border border-neutral-200 bg-white text-neutral-800 hover:border-neutral-300;
+  }
+  .card {
+    @apply rounded-2xl bg-white shadow border border-white/60;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full bg-emerald-100 text-emerald-700 px-2.5 py-1 text-xs;
+  }
 }
