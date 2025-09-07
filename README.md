@@ -35,6 +35,9 @@ Recycling behavior is mostly about **habit & motivation**. Fitness apps made dai
   Only a perceptual hash & label are stored—**no photos**.
 
 ---
+![Landing page](public\landing.png)
+![Leaderboard page](public\leaderboard.png)
+![Achievements page](public\achievements.png)
 
 ## Tech Stack
 
@@ -282,7 +285,6 @@ Deploy to Vercel/Netlify/Render as a standard Next.js app (remember to add your 
 
 ## License
 
-MIT — see `LICENSE`.
 
 ---
 

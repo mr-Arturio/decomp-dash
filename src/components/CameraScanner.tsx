@@ -24,6 +24,9 @@ type MapResult = {
   _model?: string;
 };
 
+// DEMO FLAG: when true, QR code is not required
+const DEMO_NO_QR = process.env.NEXT_PUBLIC_DEMO_NO_QR === "1";
+
 export default function CameraScanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -58,13 +61,12 @@ export default function CameraScanner() {
   >(new Map());
 
   useEffect(() => {
-    // Cleanup on unmount
     return () => stopSession();
   }, []);
 
   function stopSession() {
     setSessionActive(false);
-    setBinTag(null);
+    if (!DEMO_NO_QR) setBinTag(null);
     if (detectTimerRef.current) {
       clearInterval(detectTimerRef.current);
       detectTimerRef.current = null;
@@ -77,6 +79,12 @@ export default function CameraScanner() {
     const stream = (v?.srcObject as MediaStream) || null;
     if (stream) stream.getTracks().forEach((t) => t.stop());
     if (v) v.srcObject = null;
+  }
+
+  function getDemoTag(): BinTag {
+    const localTeam = localStorage.getItem("dd:lastTeamId") || "demo-team";
+    const localBin = localStorage.getItem("dd:lastBinId") || "demo-bin";
+    return { teamId: localTeam, binId: localBin };
   }
 
   async function startSession() {
@@ -100,7 +108,13 @@ export default function CameraScanner() {
       videoRef.current.srcObject = stream;
       await videoRef.current.play();
 
-      // Start QR + motion loop (~3 fps)
+      // In demo mode, prefill a fake tag and skip QR detection
+      if (DEMO_NO_QR) {
+        const demo = getDemoTag();
+        setBinTag(demo);
+      }
+
+      // Start motion (and optionally QR) loop (~3 fps)
       if (detectTimerRef.current) clearInterval(detectTimerRef.current);
       detectTimerRef.current = setInterval(() => {
         const v = videoRef.current;
@@ -132,24 +146,26 @@ export default function CameraScanner() {
         }
         prevFrameRef.current = img;
 
-        // QR detect
-        const qr = jsQR(img.data, w, h);
-        const now = Date.now();
-        if (
-          qr &&
-          typeof qr.data === "string" &&
-          qr.data.startsWith("BINTAG:")
-        ) {
-          const parts = qr.data.split(":");
-          if (parts.length >= 3) {
-            const tag = { teamId: parts[1], binId: parts[2] };
-            setBinTag(tag);
-            localStorage.setItem("dd:lastTeamId", tag.teamId);
-            localStorage.setItem("dd:lastBinId", tag.binId);
-            lastQRSeenAtRef.current = now;
+        if (!DEMO_NO_QR) {
+          // QR detect (demo mode skips this)
+          const qr = jsQR(img.data, w, h);
+          const now = Date.now();
+          if (
+            qr &&
+            typeof qr.data === "string" &&
+            qr.data.startsWith("BINTAG:")
+          ) {
+            const parts = qr.data.split(":");
+            if (parts.length >= 3) {
+              const tag = { teamId: parts[1], binId: parts[2] };
+              setBinTag(tag);
+              localStorage.setItem("dd:lastTeamId", tag.teamId);
+              localStorage.setItem("dd:lastBinId", tag.binId);
+              lastQRSeenAtRef.current = now;
+            }
+          } else {
+            if (now - lastQRSeenAtRef.current > 1500) setBinTag(null);
           }
-        } else {
-          if (now - lastQRSeenAtRef.current > 1500) setBinTag(null);
         }
       }, 333);
 
@@ -198,7 +214,6 @@ export default function CameraScanner() {
       if (r.ok) {
         const data = (await r.json()) as MapResult;
 
-        // Typed header parsing (no 'any')
         const modeHeader = r.headers.get("x-map-mode");
         const parsedMode: MapResult["_mode"] =
           modeHeader === "llm"
@@ -225,7 +240,16 @@ export default function CameraScanner() {
 
   async function captureAndRecord() {
     if (!videoRef.current || !canvasRef.current) return;
-    if (!sessionActive || !binTag) return;
+    if (!sessionActive) return;
+
+    // Resolve tag (demo mode auto-fills if needed)
+    const activeTag: BinTag | null = DEMO_NO_QR
+      ? binTag ?? getDemoTag()
+      : binTag;
+    if (!activeTag) {
+      alert("Show your BinTag QR to continue.");
+      return;
+    }
 
     // Motion threshold (>= 2%)
     if ((motionDeltaRef.current || 0) < 0.02) {
@@ -246,8 +270,8 @@ export default function CameraScanner() {
       const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const ahash = aHashFromImageData(img);
 
-      // Duplicate check (Hamming < 5) for this bin
-      const key = `${binTag.teamId}:${binTag.binId}`;
+      // Duplicate check (Hamming < 5) per bin
+      const key = `${activeTag.teamId}:${activeTag.binId}`;
       const entry = recentByBinRef.current.get(key) || {
         hashes: [],
         times: [] as number[],
@@ -267,7 +291,7 @@ export default function CameraScanner() {
         return;
       }
 
-      // Classify (with fallback stub)
+      // Classify
       const preds = await classifyWithMobilenet(canvas);
       const predictedLabel = preds[0]?.className || "unknown";
       const confidence = preds[0]?.probability ?? 0.5;
@@ -288,8 +312,8 @@ export default function CameraScanner() {
       const uid = await ensureAnonAuth();
       await addDoc(collection(db, "scans"), {
         userId: uid,
-        teamId: binTag.teamId,
-        binId: binTag.binId,
+        teamId: activeTag.teamId,
+        binId: activeTag.binId,
         ts: serverTimestamp(),
         label: predictedLabel,
         material,
@@ -327,6 +351,8 @@ export default function CameraScanner() {
     }
   }
 
+  const captureDisabled = !sessionActive || !!busy || (!DEMO_NO_QR && !binTag);
+
   return (
     <div className="space-y-3">
       <div className="card overflow-hidden">
@@ -342,7 +368,11 @@ export default function CameraScanner() {
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/40 to-transparent" />
           <div className="absolute left-3 top-3">
             <span className="chip bg-white/90 text-neutral-800">
-              {binTag ? "BinTag detected" : "Show your BinTag QR"}
+              {DEMO_NO_QR
+                ? "Demo mode: QR optional"
+                : binTag
+                ? "BinTag detected"
+                : "Show your BinTag QR"}
             </span>
           </div>
         </div>
@@ -366,7 +396,7 @@ export default function CameraScanner() {
       </div>
 
       <button
-        disabled={!sessionActive || !binTag || busy}
+        disabled={captureDisabled}
         onClick={captureAndRecord}
         className="btn-primary w-full disabled:opacity-50"
       >
