@@ -66,30 +66,30 @@ export default function RootLayout({
           </header>
           <main className="space-y-4">{children}</main>
 
-          <nav className="fixed bottom-4 left-0 right-0 mx-auto w-[92%] max-w-md rounded-2xl bg-white/90 shadow backdrop-blur px-4 py-2 grid grid-cols-3 sm:hidden">
+          <nav className="fixed bottom-4 left-0 right-0 mx-auto mb-4 w-[92%] max-w-md rounded-2xl bg-white/90 shadow backdrop-blur px-3 py-2 grid grid-cols-4 border border-neutral-200 sm:hidden">
             <a
               href="/scan"
-              className="flex flex-col items-center py-1 text-xs text-neutral-700 hover:text-emerald-700"
+              className="py-2 text-center text-sm text-neutral-700 hover:text-emerald-700"
             >
-              📷<span>Scan</span>
+              Scan
             </a>
             <a
               href="/team"
-              className="flex flex-col items-center py-1 text-xs text-neutral-700 hover:text-emerald-700"
+              className="py-2 text-center text-sm text-neutral-700 hover:text-emerald-700"
             >
-              🏷️<span>Team</span>
+              Team
             </a>
             <a
               href="/leaderboard"
-              className="flex flex-col items-center py-1 text-xs text-neutral-700 hover:text-emerald-700"
+              className="py-2 text-center text-sm text-neutral-700 hover:text-emerald-700"
             >
-              🏆<span>Rank</span>
+              Rank
             </a>
             <a
               href="/achievements"
-              className="flex flex-col items-center py-1 text-xs text-neutral-700 hover:text-emerald-700"
+              className="py-2 text-center text-sm text-neutral-700 hover:text-emerald-700"
             >
-              🎖️<span>Awards</span>
+              Awards
             </a>
           </nav>
         </div>
