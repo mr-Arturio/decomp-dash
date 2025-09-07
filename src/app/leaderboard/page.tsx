@@ -11,6 +11,7 @@ import {
 import { db, ensureAnonAuth } from "@/lib/firebase";
 import { scoreFor } from "@/lib/scoring";
 
+// Local types for Firestore data
 type Row = { teamId: string; points: number };
 type MyScan = {
   id: string;
@@ -21,6 +22,8 @@ type MyScan = {
   years: number;
   points: number;
 };
+
+type DocData = Record<string, unknown>;
 
 export default function Leaderboard() {
   const [daily, setDaily] = useState<Row[]>([]);
@@ -41,12 +44,12 @@ export default function Leaderboard() {
         getDocs(dailyQ),
       ]);
 
-      const agg = (docs: any[]) => {
+      const agg = (docs: { data(): DocData }[]) => {
         const map = new Map<string, number>();
         for (const d of docs) {
           const data = d.data();
-          const teamId = data.teamId as string;
-          const pts = (data.points as number) || 0;
+          const teamId = typeof data.teamId === "string" ? data.teamId : "";
+          const pts = typeof data.points === "number" ? data.points : 0;
           if (!teamId) continue;
           map.set(teamId, (map.get(teamId) || 0) + pts);
         }
@@ -61,7 +64,6 @@ export default function Leaderboard() {
       setDaily(dailyRows);
       setAll(allRows);
 
-      // Hydrate team names for both lists (chunked by 10 for Firestore 'in' query)
       const ids = Array.from(
         new Set([...dailyRows, ...allRows].map((r) => r.teamId).filter(Boolean))
       );
@@ -76,9 +78,10 @@ export default function Leaderboard() {
           const qTeams = query(teamsCol, where(documentId(), "in", chunk));
           const snap = await getDocs(qTeams);
           snap.forEach((doc) => {
-            const data = doc.data() as any;
+            const data = doc.data() as DocData;
             nameMap[doc.id] =
-              (data?.name as string) || `Team ${doc.id.slice(0, 6)}…`;
+              (typeof data.name === "string" && data.name) ||
+              `Team ${doc.id.slice(0, 6)}…`;
           });
         }
         setTeamNames((prev) => ({ ...prev, ...nameMap }));
@@ -95,19 +98,38 @@ export default function Leaderboard() {
       const snap = await getDocs(myQ);
 
       const rows: MyScan[] = snap.docs.map((d) => {
-        const data = d.data() as any;
-        const ts: Date | null = data.ts?.toDate
-          ? (data.ts as Timestamp).toDate()
-          : null;
-        const { years, bin: ruleBin } = scoreFor(data.material || "unknown");
+        const data = d.data() as DocData;
+
+        // Timestamp → Date
+        const tsField = data.ts as Timestamp | undefined;
+        const ts: Date | null = tsField?.toDate ? tsField.toDate() : null;
+
+        // Material as a string (fallback to "unknown")
+        const material: string =
+          typeof data.material === "string" ? data.material : "unknown";
+
+        // Derive years/bin without any-cast
+        const { years, bin: ruleBin } = scoreFor(material);
+
+        // Respect stored binSuggested if present
+        const binSuggested: string =
+          typeof data.binSuggested === "string" ? data.binSuggested : ruleBin;
+
+        // Optional human label
+        const label = typeof data.label === "string" ? data.label : undefined;
+
+        // Points fallback
+        const points: number =
+          typeof data.points === "number" ? data.points : Math.round(years);
+
         return {
           id: d.id,
           ts,
-          label: data.label, // shown if stored on write
-          material: data.material || "unknown",
-          bin: data.binSuggested || ruleBin,
+          label,
+          material,
+          bin: binSuggested,
           years,
-          points: data.points || Math.round(years),
+          points,
         };
       });
 
@@ -208,9 +230,6 @@ export default function Leaderboard() {
                     <div className="text-sm">
                       Years: <b>{Math.round(s.years).toLocaleString()}</b>
                     </div>
-                    {/* <div className="text-sm">
-                      Points: <b>{s.points}</b>
-                    </div> */}
                   </div>
                 </div>
               </li>

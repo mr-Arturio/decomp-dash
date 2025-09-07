@@ -58,8 +58,8 @@ export default function CameraScanner() {
   >(new Map());
 
   useEffect(() => {
+    // Cleanup on unmount
     return () => stopSession();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function stopSession() {
@@ -197,9 +197,20 @@ export default function CameraScanner() {
       });
       if (r.ok) {
         const data = (await r.json()) as MapResult;
-        // attach server hint headers
-        data._mode = (r.headers.get("x-map-mode") as any) || "heuristic";
-        data._model = r.headers.get("x-map-model") || "";
+
+        // Typed header parsing (no 'any')
+        const modeHeader = r.headers.get("x-map-mode");
+        const parsedMode: MapResult["_mode"] =
+          modeHeader === "llm"
+            ? "llm"
+            : modeHeader === "heuristic"
+            ? "heuristic"
+            : "heuristic";
+        data._mode = parsedMode;
+
+        const modelHeader = r.headers.get("x-map-model");
+        data._model = modelHeader ?? "";
+
         return data;
       }
     } catch {

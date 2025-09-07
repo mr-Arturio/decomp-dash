@@ -113,8 +113,12 @@ export default function ShareBadgeButton({
       const file = new File([blob], fileName, { type: "image/png" });
 
       // If Web Share Level 2 is supported (mobile & some desktops)
-      if ((navigator as any).canShare?.({ files: [file] })) {
-        await (navigator as any).share({
+      const nav = navigator as Navigator & {
+        canShare?: (data?: ShareData) => boolean;
+        share?: (data: ShareData) => Promise<void>;
+      };
+      if (nav.canShare?.({ files: [file] }) && nav.share) {
+        await nav.share({
           files: [file],
           title: "Decomp Dash Achievement",
           text: "I just unlocked an eco achievement on Decomp Dash!",

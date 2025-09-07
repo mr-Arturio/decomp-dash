@@ -1,6 +1,7 @@
 "use client";
 import QRCode from "qrcode";
 import { useEffect, useState } from "react";
+import Image from "next/image";
 
 export default function QRBadge({ payload }: { payload: string }) {
   const [dataUrl, setDataUrl] = useState<string>("");
@@ -14,10 +15,13 @@ export default function QRBadge({ payload }: { payload: string }) {
   return (
     <div className="flex flex-col items-center gap-2">
       {dataUrl && (
-        <img
+        <Image
           src={dataUrl}
           alt="BinTag QR"
+          width={256}
+          height={256}
           className="rounded-xl border border-emerald-200 shadow"
+          unoptimized
         />
       )}
       <div className="text-xs text-neutral-500">
