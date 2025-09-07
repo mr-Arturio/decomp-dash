@@ -28,14 +28,14 @@ export default function RootLayout({
         <div className="mx-auto max-w-md px-4 pb-20 pt-4 sm:max-w-2xl">
           <header className="sticky top-0 z-20 -mx-4 mb-4 bg-gradient-to-b from-white/80 to-white/40 backdrop-blur supports-[backdrop-filter]:bg-white/60 border-b">
             <div className="mx-auto max-w-md sm:max-w-2xl px-4 py-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
+              <a href="/" className="flex items-center gap-2">
                 <div className="h-8 w-8 rounded-xl bg-emerald-600 text-white grid place-items-center shadow">
                   ♻️
                 </div>
                 <h1 className="text-lg font-semibold text-neutral-900">
                   Decomp Dash
                 </h1>
-              </div>
+              </a>
               <nav className="hidden sm:flex gap-3 text-sm">
                 <a
                   href="/scan"

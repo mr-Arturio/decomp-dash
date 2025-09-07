@@ -108,7 +108,6 @@ export default function CameraScanner() {
         if (prev && prev.data.length === img.data.length) {
           let diff = 0;
           let count = 0;
-          // sample every 16th pixel
           for (let i = 0; i < img.data.length; i += 16 * 4) {
             const dr = Math.abs(img.data[i] - prev.data[i]);
             const dg = Math.abs(img.data[i + 1] - prev.data[i + 1]);
@@ -121,7 +120,7 @@ export default function CameraScanner() {
         }
         prevFrameRef.current = img;
 
-        // QR detect (you can downscale to 320px wide if CPU is high)
+        // QR detect
         const qr = jsQR(img.data, w, h);
         const now = Date.now();
         if (
@@ -135,7 +134,6 @@ export default function CameraScanner() {
             lastQRSeenAtRef.current = now;
           }
         } else {
-          // If QR not seen recently, clear it
           if (now - lastQRSeenAtRef.current > 1500) setBinTag(null);
         }
       }, 333);
@@ -263,16 +261,17 @@ export default function CameraScanner() {
           (1 - 0.5 * Math.max(0, Math.min(1, mapped.risk_score ?? 0)))
       );
 
-      // Persist
       const uid = await ensureAnonAuth();
       await addDoc(collection(db, "scans"), {
         userId: uid,
         teamId: binTag.teamId,
         binId: binTag.binId,
         ts: serverTimestamp(),
+        label: predictedLabel, 
         material,
         confidence,
         binSuggested: bin,
+        years: Math.round(years),
         ahash,
         points,
       });
