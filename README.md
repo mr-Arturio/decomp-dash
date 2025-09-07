@@ -36,8 +36,8 @@ Recycling behavior is mostly about **habit & motivation**. Fitness apps made dai
 
 ---
 ![Landing page](./public/landing.png)
-![Leaderboard page](public/leaderboard.png)
-![Achievements page](public\achievements.png)
+![Leaderboard page](./public/leaderboard.png)
+![Achievements page](./public/achievements.png)
 
 ## Tech Stack
 
