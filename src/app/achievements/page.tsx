@@ -10,6 +10,7 @@ import {
 } from "firebase/firestore";
 import { db, ensureAnonAuth } from "@/lib/firebase";
 import { scoreFor } from "@/lib/scoring";
+import ShareBadgeButton from "@/components/ShareBadgeButton";
 
 // ---- Types ----
 type ScanDoc = {
@@ -28,7 +29,7 @@ type Stats = {
   totalPoints: number;
   byMaterialYears: TotalsMap;
   byBinYears: TotalsMap;
-  byDayYears: TotalsMap;   // key: YYYY-MM-DD
+  byDayYears: TotalsMap; // key: YYYY-MM-DD
   byMonthYears: TotalsMap; // key: YYYY-MM
   mostScannedItem?: string; // by count of label/material
   uniqueMaterials: Set<string>;
@@ -65,8 +66,7 @@ function computeStreaks(dayKeys: string[]): { current: number; best: number } {
   for (let i = 1; i < all.length; i++) {
     const prev = toDate(all[i - 1]);
     const curr = toDate(all[i]);
-    const diffDays =
-      (prev.getTime() - curr.getTime()) / (1000 * 60 * 60 * 24);
+    const diffDays = (prev.getTime() - curr.getTime()) / (1000 * 60 * 60 * 24);
     if (diffDays === 1) {
       cur += 1;
       best = Math.max(best, cur);
@@ -77,9 +77,7 @@ function computeStreaks(dayKeys: string[]): { current: number; best: number } {
 
   // compute current streak relative to today
   const today = dayKey(new Date());
-  const yesterday = dayKey(
-    new Date(Date.now() - 24 * 60 * 60 * 1000)
-  );
+  const yesterday = dayKey(new Date(Date.now() - 24 * 60 * 60 * 1000));
   let current = 0;
   const set = new Set(all);
   if (set.has(today)) {
@@ -177,8 +175,7 @@ const ACHIEVEMENTS: Achievement[] = [
     name: "Marathon Day",
     desc: "≥ 5,000 years saved in a day.",
     emoji: "🚀",
-    unlocked: (s) =>
-      Math.max(0, ...Object.values(s.byDayYears)) >= 5_000,
+    unlocked: (s) => Math.max(0, ...Object.values(s.byDayYears)) >= 5_000,
   },
 ];
 
@@ -218,10 +215,7 @@ function BarRow({
         <span>{fmtInt(value)} yrs</span>
       </div>
       <div className="mt-1 h-2 w-full rounded-full bg-neutral-200">
-        <div
-          className="h-2 rounded-full bg-emerald-500"
-          style={{ width }}
-        />
+        <div className="h-2 rounded-full bg-emerald-500" style={{ width }} />
       </div>
     </div>
   );
@@ -239,9 +233,7 @@ function Badge({ a, done }: { a: Achievement; done: boolean }) {
         <div className="font-medium">{a.name}</div>
         <div className="text-xs text-neutral-600">{a.desc}</div>
         {!done && (
-          <div className="mt-1 text-[11px] text-neutral-500 italic">
-            Locked
-          </div>
+          <div className="mt-1 text-[11px] text-neutral-500 italic">Locked</div>
         )}
       </div>
     </div>
@@ -309,8 +301,9 @@ export default function AchievementsPage() {
       const bestMonthKey =
         Object.entries(byMonthYears).sort((a, b) => b[1] - a[1])[0] || null;
 
-      const mostScannedItem =
-        Object.entries(labelCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+      const mostScannedItem = Object.entries(labelCounts).sort(
+        (a, b) => b[1] - a[1]
+      )[0]?.[0];
 
       const { current: streakCurrent, best: streakBest } = computeStreaks([
         ...dayPresence,
@@ -358,8 +351,12 @@ export default function AchievementsPage() {
     );
   }
 
-  const topMat = Object.entries(stats.byMaterialYears).sort((a, b) => b[1] - a[1])[0];
-  const topBin = Object.entries(stats.byBinYears).sort((a, b) => b[1] - a[1])[0];
+  const topMat = Object.entries(stats.byMaterialYears).sort(
+    (a, b) => b[1] - a[1]
+  )[0];
+  const topBin = Object.entries(stats.byBinYears).sort(
+    (a, b) => b[1] - a[1]
+  )[0];
 
   const binOrder = ["recycle", "compost", "landfill", "ewaste", "other"];
   const matOrder = ["plastic", "paper", "glass", "metal", "organic", "other"];
@@ -371,7 +368,10 @@ export default function AchievementsPage() {
     <section className="space-y-6">
       {/* Top stats */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard title="Total Years Saved" value={`${fmtInt(stats.totalYears)} yrs`} />
+        <StatCard
+          title="Total Years Saved"
+          value={`${fmtInt(stats.totalYears)} yrs`}
+        />
         <StatCard title="Total Points" value={`${fmtInt(stats.totalPoints)}`} />
         <StatCard
           title="Best Day"
@@ -399,7 +399,12 @@ export default function AchievementsPage() {
           {matOrder
             .filter((k) => stats.byMaterialYears[k])
             .map((k) => (
-              <BarRow key={k} label={k} value={stats.byMaterialYears[k]} max={matMax} />
+              <BarRow
+                key={k}
+                label={k}
+                value={stats.byMaterialYears[k]}
+                max={matMax}
+              />
             ))}
         </div>
       </div>
@@ -418,7 +423,12 @@ export default function AchievementsPage() {
           {binOrder
             .filter((k) => stats.byBinYears[k])
             .map((k) => (
-              <BarRow key={k} label={k} value={stats.byBinYears[k]} max={binMax} />
+              <BarRow
+                key={k}
+                label={k}
+                value={stats.byBinYears[k]}
+                max={binMax}
+              />
             ))}
         </div>
       </div>
@@ -436,13 +446,31 @@ export default function AchievementsPage() {
         <div className="flex items-center justify-between">
           <h3 className="font-semibold">Achievements</h3>
           <span className="chip">
-            Streak: <b className="ml-1">{stats.streakCurrent}</b> (best {stats.streakBest})
+            Streak: <b className="ml-1">{stats.streakCurrent}</b> (best{" "}
+            {stats.streakBest})
           </span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {ACHIEVEMENTS.map((a) => (
-            <Badge key={a.id} a={a} done={unlocked.has(a.id)} />
-          ))}
+          {ACHIEVEMENTS.map((a) => {
+            const done = unlocked.has(a.id);
+            return (
+              <div key={a.id} className="space-y-2">
+                <Badge a={a} done={done} />
+                {done && (
+                  <div className="flex justify-center">
+                    <ShareBadgeButton
+                      emoji={a.emoji}
+                      title={a.name}
+                      subtitle={
+                        /* e.g. */ `Total saved: ${stats.totalYears.toLocaleString()} yrs`
+                      }
+                      fileName={`decomp-${a.id}.png`}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </section>

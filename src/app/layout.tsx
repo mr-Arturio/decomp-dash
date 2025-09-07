@@ -55,6 +55,12 @@ export default function RootLayout({
                 >
                   Leaderboard
                 </a>
+                <a
+                  href="/achievements"
+                  className="text-neutral-700 hover:text-emerald-700"
+                >
+                  Achievements
+                </a>
               </nav>
             </div>
           </header>
@@ -78,6 +84,12 @@ export default function RootLayout({
               className="flex flex-col items-center py-1 text-xs text-neutral-700 hover:text-emerald-700"
             >
               🏆<span>Rank</span>
+            </a>
+            <a
+              href="/achievements"
+              className="flex flex-col items-center py-1 text-xs text-neutral-700 hover:text-emerald-700"
+            >
+              🎖️<span>Awards</span>
             </a>
           </nav>
         </div>
