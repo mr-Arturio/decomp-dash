@@ -2,17 +2,16 @@
 
 import "@tensorflow/tfjs";
 import { useEffect, useRef, useState } from "react";
-import { ScoreCard } from "./ScoreCard";
+import jsQR from "jsqr";
+import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+
 import { aHashFromImageData } from "../lib/ahash";
+import { hammingHex } from "../lib/hamming";
 import { MATERIALS, labelToMaterial } from "../lib/materials";
 import { scoreFor } from "../lib/scoring";
 import { db, ensureAnonAuth } from "../lib/firebase";
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
-import jsQR from "jsqr";
-import { hammingHex } from "../lib/hamming";
 
 type BinTag = { teamId: string; binId: string };
-
 type Pred = { className: string; probability: number };
 
 export default function CameraScanner() {
@@ -37,7 +36,8 @@ export default function CameraScanner() {
   const lastQRSeenAtRef = useRef<number>(0);
   const prevFrameRef = useRef<ImageData | null>(null);
   const motionDeltaRef = useRef<number>(0);
-  const detectTimerRef = useRef<number | null>(null);
+  const detectTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sessionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Per-bin recent hashes + hourly cap
   const recentByBinRef = useRef<
@@ -45,37 +45,61 @@ export default function CameraScanner() {
   >(new Map());
 
   useEffect(() => {
-    return () => {
-      if (videoRef.current && videoRef.current.srcObject) {
-        const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-        tracks.forEach((t) => t.stop());
-      }
-      if (detectTimerRef.current) window.clearInterval(detectTimerRef.current);
-    };
+    // Cleanup on unmount
+    return () => stopSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function stopSession() {
+    setSessionActive(false);
+    setBinTag(null);
+    if (detectTimerRef.current) {
+      clearInterval(detectTimerRef.current);
+      detectTimerRef.current = null;
+    }
+    if (sessionTimerRef.current) {
+      clearTimeout(sessionTimerRef.current);
+      sessionTimerRef.current = null;
+    }
+    const v = videoRef.current;
+    const stream = (v?.srcObject as MediaStream) || null;
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    if (v) v.srcObject = null;
+  }
 
   async function startSession() {
     setResult(null);
     setSessionActive(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
-        audio: false,
-      });
+      const stream = await navigator.mediaDevices
+        .getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        })
+        .catch(() =>
+          navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        );
+
       if (!videoRef.current) return;
       videoRef.current.srcObject = stream;
       await videoRef.current.play();
 
       // Start QR + motion loop (~3 fps)
-      if (detectTimerRef.current) window.clearInterval(detectTimerRef.current);
-      detectTimerRef.current = window.setInterval(() => {
+      if (detectTimerRef.current) clearInterval(detectTimerRef.current);
+      detectTimerRef.current = setInterval(() => {
         const v = videoRef.current;
         const c = canvasRef.current;
         if (!v || !c) return;
+
         const w = (c.width = v.videoWidth || 640);
         const h = (c.height = v.videoHeight || 480);
         const ctx = c.getContext("2d");
         if (!ctx) return;
+
         ctx.drawImage(v, 0, 0, w, h);
         const img = ctx.getImageData(0, 0, w, h);
 
@@ -97,7 +121,7 @@ export default function CameraScanner() {
         }
         prevFrameRef.current = img;
 
-        // QR detect (downscale to speed up if needed)
+        // QR detect (you can downscale to 320px wide if CPU is high)
         const qr = jsQR(img.data, w, h);
         const now = Date.now();
         if (
@@ -112,13 +136,15 @@ export default function CameraScanner() {
           }
         } else {
           // If QR not seen recently, clear it
-          if (now - lastQRSeenAtRef.current > 1500) {
-            setBinTag(null);
-          }
+          if (now - lastQRSeenAtRef.current > 1500) setBinTag(null);
         }
       }, 333);
+
+      // Auto-stop after 90s
+      if (sessionTimerRef.current) clearTimeout(sessionTimerRef.current);
+      sessionTimerRef.current = setTimeout(stopSession, 90_000);
     } catch (e) {
-      setSessionActive(false);
+      stopSession();
       console.error("Camera access failed", e);
     }
   }
@@ -132,6 +158,7 @@ export default function CameraScanner() {
       const preds = await model.classify(canvas);
       return preds as unknown as Pred[];
     } catch {
+      // Fallback stub for offline/demo
       return [{ className: "plastic bottle", probability: 0.9 }];
     }
   }
@@ -162,7 +189,9 @@ export default function CameraScanner() {
         }),
       });
       if (r.ok) return (await r.json()) as any;
-    } catch {}
+    } catch {
+      // ignore -> fallback below
+    }
     // Fallback
     const top = preds[0]?.className || "";
     const material = labelToMaterial(top);
@@ -172,8 +201,7 @@ export default function CameraScanner() {
 
   async function captureAndRecord() {
     if (!videoRef.current || !canvasRef.current) return;
-    if (!sessionActive) return;
-    if (!binTag) return;
+    if (!sessionActive || !binTag) return;
 
     // Motion threshold (>= 2%)
     if ((motionDeltaRef.current || 0) < 0.02) {
@@ -189,6 +217,7 @@ export default function CameraScanner() {
       canvas.height = video.videoHeight || 480;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
+
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const ahash = aHashFromImageData(img);
@@ -197,7 +226,7 @@ export default function CameraScanner() {
       const key = `${binTag.teamId}:${binTag.binId}`;
       const entry = recentByBinRef.current.get(key) || {
         hashes: [],
-        times: [],
+        times: [] as number[],
       };
       for (const h of entry.hashes) {
         if (hammingHex(h, ahash) < 5) {
@@ -293,19 +322,27 @@ export default function CameraScanner() {
       <div className="flex gap-2">
         <button
           onClick={startSession}
-          disabled={!binTag || sessionActive}
+          disabled={sessionActive}
           className="btn-outline w-1/2"
         >
           {sessionActive ? "Session running…" : "Start 90s Session"}
         </button>
         <button
-          disabled={!sessionActive || !binTag || busy}
-          onClick={captureAndRecord}
-          className="btn-primary w-1/2 disabled:opacity-50"
+          onClick={stopSession}
+          disabled={!sessionActive}
+          className="btn-outline w-1/2"
         >
-          {busy ? "Scanning…" : "Capture & Save"}
+          Stop
         </button>
       </div>
+
+      <button
+        disabled={!sessionActive || !binTag || busy}
+        onClick={captureAndRecord}
+        className="btn-primary w-full disabled:opacity-50"
+      >
+        {busy ? "Scanning…" : "Capture & Save"}
+      </button>
 
       {result && (
         <div className="card p-4 space-y-2">
@@ -327,7 +364,7 @@ export default function CameraScanner() {
           </div>
           <p className="text-neutral-600 text-sm">
             Tip:{" "}
-            {(result as any).tip ??
+            {result.tip ??
               "Rinse/flatten when possible to reduce contamination."}
           </p>
           <p className="text-xs text-neutral-500">

@@ -10,31 +10,44 @@ export default function TeamPage() {
   const [binId, setBinId] = useState("");
 
   useEffect(() => {
+    // make sure anonymous auth is established
     ensureAnonAuth();
+
+    // restore last created team/bin from localStorage for convenience
+    const lastTeam = localStorage.getItem("dd:lastTeamId");
+    const lastBin = localStorage.getItem("dd:lastBinId");
+    if (lastTeam) setTeamId(lastTeam);
+    if (lastBin) setBinId(lastBin);
   }, []);
 
   async function createTeam() {
-    const ref = await addDoc(collection(db, "teams"), {
+    // create team
+    const teamRef = await addDoc(collection(db, "teams"), {
       name: teamName || "My Team",
       createdAt: serverTimestamp(),
     });
-    setTeamId(ref.id);
-    const bin = await addDoc(collection(db, "bins"), {
-      teamId: ref.id,
+    setTeamId(teamRef.id);
+    localStorage.setItem("dd:lastTeamId", teamRef.id);
+
+    // create default bin
+    const binRef = await addDoc(collection(db, "bins"), {
+      teamId: teamRef.id,
       label: "Main Bin",
       createdAt: serverTimestamp(),
     });
-    setBinId(bin.id);
+    setBinId(binRef.id);
+    localStorage.setItem("dd:lastBinId", binRef.id);
   }
 
   async function createBin() {
     if (!teamId) return;
-    const bin = await addDoc(collection(db, "bins"), {
+    const binRef = await addDoc(collection(db, "bins"), {
       teamId,
       label: `Bin ${Math.floor(Math.random() * 100)}`,
       createdAt: serverTimestamp(),
     });
-    setBinId(bin.id);
+    setBinId(binRef.id);
+    localStorage.setItem("dd:lastBinId", binRef.id);
   }
 
   return (
@@ -52,10 +65,15 @@ export default function TeamPage() {
             Create
           </button>
         </div>
+        {teamId && (
+          <p className="mt-2 text-xs text-neutral-500">
+            Team ID: <code>{teamId}</code>
+          </p>
+        )}
       </div>
 
       <div className="card p-4">
-        <div className="flex items-center justify-between mb-2">
+        <div className="mb-2 flex items-center justify-between">
           <h3 className="font-medium">Your BinTag</h3>
           {teamId && (
             <button onClick={createBin} className="btn-outline">
@@ -63,6 +81,7 @@ export default function TeamPage() {
             </button>
           )}
         </div>
+
         {teamId && binId ? (
           <div className="space-y-2">
             <QRBadge payload={`BINTAG:${teamId}:${binId}`} />

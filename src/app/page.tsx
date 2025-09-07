@@ -9,8 +9,6 @@ export default function Page() {
 
   return (
     <section className="card p-4 sm:p-6">
-      <div className="h-3 rounded bg-emerald-500" />
-
       <div className="flex items-center gap-2 mb-2">
         <span className="chip">Eco</span>
         <span className="chip">PWA</span>
