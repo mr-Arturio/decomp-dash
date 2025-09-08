@@ -27,12 +27,27 @@ type MapResult = {
 // DEMO FLAG: when true, QR code is not required
 const DEMO_NO_QR = process.env.NEXT_PUBLIC_DEMO_NO_QR === "1";
 
+// loop settings
+const SCAN_INTERVAL_MS = 333; // ~3 fps
+const DETECT_WIDTH = 320; // downscale for motion/QR to reduce CPU
+
+// ---- cached MobileNet load (avoid cold starts every capture) ----
+let _mobilenetModel: any | null = null;
+async function getMobileNet() {
+  if (_mobilenetModel) return _mobilenetModel;
+  const mobilenet = await import("@tensorflow-models/mobilenet");
+  _mobilenetModel = await mobilenet.load();
+  return _mobilenetModel;
+}
+
 export default function CameraScanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const captureCanvasRef = useRef<HTMLCanvasElement | null>(null); // full-res capture
+  const detectCanvasRef = useRef<HTMLCanvasElement | null>(null); // downscaled loop
 
   const [sessionActive, setSessionActive] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   const [binTag, setBinTag] = useState<BinTag | null>(null);
   const [result, setResult] = useState<null | {
     label: string;
@@ -61,7 +76,16 @@ export default function CameraScanner() {
   >(new Map());
 
   useEffect(() => {
-    return () => stopSession();
+    // stop when unmounting or tab becomes hidden
+    const onVis = () => {
+      if (document.hidden) stopSession();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      stopSession();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function stopSession() {
@@ -76,7 +100,7 @@ export default function CameraScanner() {
       sessionTimerRef.current = null;
     }
     const v = videoRef.current;
-    const stream = (v?.srcObject as MediaStream) || null;
+    const stream = (v?.srcObject as MediaStream | null) || null;
     if (stream) stream.getTracks().forEach((t) => t.stop());
     if (v) v.srcObject = null;
   }
@@ -88,6 +112,7 @@ export default function CameraScanner() {
   }
 
   async function startSession() {
+    setErr(null);
     setResult(null);
     setSessionActive(true);
     try {
@@ -95,8 +120,9 @@ export default function CameraScanner() {
         .getUserMedia({
           video: {
             facingMode: { ideal: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { ideal: 640 },
+            height: { ideal: 640 },
+            aspectRatio: 1,
           },
           audio: false,
         })
@@ -104,32 +130,35 @@ export default function CameraScanner() {
           navigator.mediaDevices.getUserMedia({ video: true, audio: false })
         );
 
-      if (!videoRef.current) return;
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
+      const v = videoRef.current;
+      if (!v) return;
+      v.srcObject = stream;
+      await v.play();
+
+      // preload model in the background once the camera is live
+      getMobileNet().catch(() => {});
 
       // In demo mode, prefill a fake tag and skip QR detection
-      if (DEMO_NO_QR) {
-        const demo = getDemoTag();
-        setBinTag(demo);
-      }
+      if (DEMO_NO_QR) setBinTag(getDemoTag());
 
-      // Start motion (and optionally QR) loop (~3 fps)
+      // Start motion (and optionally QR) loop (~3 fps) on a small canvas
       if (detectTimerRef.current) clearInterval(detectTimerRef.current);
       detectTimerRef.current = setInterval(() => {
-        const v = videoRef.current;
-        const c = canvasRef.current;
-        if (!v || !c) return;
+        const v2 = videoRef.current;
+        const c = detectCanvasRef.current;
+        if (!v2 || !c) return;
 
-        const w = (c.width = v.videoWidth || 640);
-        const h = (c.height = v.videoHeight || 480);
+        const aspect = (v2.videoHeight || 480) / (v2.videoWidth || 640);
+        const w = (c.width = DETECT_WIDTH);
+        const h = (c.height = Math.max(1, Math.round(DETECT_WIDTH * aspect)));
+
         const ctx = c.getContext("2d");
         if (!ctx) return;
 
-        ctx.drawImage(v, 0, 0, w, h);
+        ctx.drawImage(v2, 0, 0, w, h);
         const img = ctx.getImageData(0, 0, w, h);
 
-        // Motion delta (sampled grid)
+        // Motion delta (sampled grid @ downscale)
         const prev = prevFrameRef.current;
         if (prev && prev.data.length === img.data.length) {
           let diff = 0;
@@ -167,14 +196,19 @@ export default function CameraScanner() {
             if (now - lastQRSeenAtRef.current > 1500) setBinTag(null);
           }
         }
-      }, 333);
+      }, SCAN_INTERVAL_MS);
 
       // Auto-stop after 90s
       if (sessionTimerRef.current) clearTimeout(sessionTimerRef.current);
       sessionTimerRef.current = setTimeout(stopSession, 90_000);
-    } catch (e) {
+    } catch (e: unknown) {
       stopSession();
-      console.error("Camera access failed", e);
+      setErr(
+        e instanceof Error
+          ? e.message
+          : "Failed to access camera. Check site permissions."
+      );
+      // console.error("Camera access failed", e);
     }
   }
 
@@ -182,8 +216,7 @@ export default function CameraScanner() {
     canvas: HTMLCanvasElement
   ): Promise<Pred[]> {
     try {
-      const mobilenet = await import("@tensorflow-models/mobilenet");
-      const model = await mobilenet.load();
+      const model = await getMobileNet();
       const preds = await model.classify(canvas);
       return preds as unknown as Pred[];
     } catch {
@@ -239,7 +272,7 @@ export default function CameraScanner() {
   }
 
   async function captureAndRecord() {
-    if (!videoRef.current || !canvasRef.current) return;
+    if (!videoRef.current || !captureCanvasRef.current) return;
     if (!sessionActive) return;
 
     // Resolve tag (demo mode auto-fills if needed)
@@ -260,7 +293,7 @@ export default function CameraScanner() {
     setBusy(true);
     try {
       const video = videoRef.current;
-      const canvas = canvasRef.current;
+      const canvas = captureCanvasRef.current;
       canvas.width = video.videoWidth || 640;
       canvas.height = video.videoHeight || 480;
       const ctx = canvas.getContext("2d");
@@ -333,6 +366,13 @@ export default function CameraScanner() {
       entry.times.push(now);
       recentByBinRef.current.set(key, entry);
 
+      if ("vibrate" in navigator) {
+        try {
+          // haptic feedback on success
+          (navigator as any).vibrate?.(50);
+        } catch {}
+      }
+
       setResult({
         label: predictedLabel,
         material,
@@ -355,18 +395,23 @@ export default function CameraScanner() {
 
   return (
     <div className="space-y-3">
-      <div className="card overflow-hidden">
-        <div className="relative">
+      <div className="card mx-auto w-48 sm:w-64 md:w-96 overflow-hidden">
+        <div className="relative aspect-square bg-neutral-900">
           <video
             ref={videoRef}
-            className="w-full aspect-[3/4] object-cover bg-neutral-900"
+            className="absolute inset-0 h-full w-full object-contain"
             playsInline
             muted
           />
-          <canvas ref={canvasRef} className="hidden" />
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/40 to-transparent" />
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/40 to-transparent" />
-          <div className="absolute left-3 top-3">
+          {/* keep canvases hidden */}
+          <canvas ref={captureCanvasRef} className="hidden" />
+          <canvas ref={detectCanvasRef} className="hidden" />
+
+          {/* tighter overlays for the smaller box */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-black/40 to-transparent" />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/40 to-transparent" />
+
+          <div className="absolute left-2 top-2">
             <span className="chip bg-white/90 text-neutral-800">
               {DEMO_NO_QR
                 ? "Demo mode: QR optional"
@@ -377,6 +422,12 @@ export default function CameraScanner() {
           </div>
         </div>
       </div>
+
+      {err && (
+        <div className="card p-3 bg-amber-50 border-amber-200 text-sm text-amber-800">
+          {err}
+        </div>
+      )}
 
       <div className="flex gap-2">
         <button
