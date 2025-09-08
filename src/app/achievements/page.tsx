@@ -52,9 +52,7 @@ const monthKey = (d: Date) =>
 // compute streaks from a Set of YYYY-MM-DD keys (local time)
 function computeStreaks(dayKeys: string[]): { current: number; best: number } {
   if (dayKeys.length === 0) return { current: 0, best: 0 };
-  // sort descending (latest first)
   const all = [...dayKeys].sort((a, b) => (a < b ? 1 : -1));
-  // helper to parse key to date at local midnight
   const toDate = (key: string) => {
     const [y, m, d] = key.split("-").map(Number);
     return new Date(y, (m ?? 1) - 1, d ?? 1);
@@ -75,20 +73,17 @@ function computeStreaks(dayKeys: string[]): { current: number; best: number } {
     }
   }
 
-  // compute current streak relative to today
   const today = dayKey(new Date());
   const yesterday = dayKey(new Date(Date.now() - 24 * 60 * 60 * 1000));
   let current = 0;
   const set = new Set(all);
   if (set.has(today)) {
-    // count back from today
     let d = new Date();
     while (set.has(dayKey(d))) {
       current++;
       d = new Date(d.getTime() - 24 * 60 * 60 * 1000);
     }
   } else if (set.has(yesterday)) {
-    // count back from yesterday
     let d = new Date(Date.now() - 24 * 60 * 60 * 1000);
     while (set.has(dayKey(d))) {
       current++;
@@ -106,89 +101,30 @@ type Achievement = {
   id: string;
   name: string;
   desc: string;
-  emoji: string; // lightweight badge icon
+  emoji: string;
   unlocked: (s: Stats) => boolean;
 };
 
 const ACHIEVEMENTS: Achievement[] = [
-  {
-    id: "first_scan",
-    name: "First Scan!",
-    desc: "Your journey starts here.",
-    emoji: "🌱",
-    unlocked: (s) => s.totalYears > 0,
-  },
-  {
-    id: "1k_years",
-    name: "1,000 Years",
-    desc: "Saved a millennium of decay time.",
-    emoji: "🧭",
-    unlocked: (s) => s.totalYears >= 1_000,
-  },
-  {
-    id: "10k_years",
-    name: "10,000 Years",
-    desc: "Carbon Crusader.",
-    emoji: "⚡",
-    unlocked: (s) => s.totalYears >= 10_000,
-  },
-  {
-    id: "100k_years",
-    name: "100,000 Years",
-    desc: "Century Champion.",
-    emoji: "🏆",
-    unlocked: (s) => s.totalYears >= 100_000,
-  },
-  {
-    id: "1m_years",
-    name: "1,000,000 Years",
-    desc: "Time Lord.",
-    emoji: "🕰️",
-    unlocked: (s) => s.totalYears >= 1_000_000,
-  },
-  {
-    id: "compost_10k",
-    name: "Compost Champ",
-    desc: "10k years saved in organic.",
-    emoji: "🍃",
-    unlocked: (s) => (s.byMaterialYears["organic"] || 0) >= 10_000,
-  },
+  { id: "first_scan", name: "First Scan!", desc: "Your journey starts here.", emoji: "🌱", unlocked: (s) => s.totalYears > 0 },
+  { id: "1k_years", name: "1,000 Years", desc: "Saved a millennium of decay time.", emoji: "🧭", unlocked: (s) => s.totalYears >= 1_000 },
+  { id: "10k_years", name: "10,000 Years", desc: "Carbon Crusader.", emoji: "⚡", unlocked: (s) => s.totalYears >= 10_000 },
+  { id: "100k_years", name: "100,000 Years", desc: "Century Champion.", emoji: "🏆", unlocked: (s) => s.totalYears >= 100_000 },
+  { id: "1m_years", name: "1,000,000 Years", desc: "Time Lord.", emoji: "🕰️", unlocked: (s) => s.totalYears >= 1_000_000 },
+  { id: "compost_10k", name: "Compost Champ", desc: "10k years saved in organic.", emoji: "🍃", unlocked: (s) => (s.byMaterialYears["organic"] || 0) >= 10_000 },
   {
     id: "all_types",
     name: "All Sorted",
     desc: "Scanned all material types.",
     emoji: "🧩",
-    unlocked: (s) =>
-      ["plastic", "metal", "glass", "paper", "organic"].every((k) =>
-        s.uniqueMaterials.has(k)
-      ),
+    unlocked: (s) => ["plastic", "metal", "glass", "paper", "organic"].every((k) => s.uniqueMaterials.has(k)),
   },
-  {
-    id: "streak_10",
-    name: "Ten-Day Streak",
-    desc: "Scanned 10 days in a row.",
-    emoji: "🔥",
-    unlocked: (s) => s.streakBest >= 10,
-  },
-  {
-    id: "big_day",
-    name: "Marathon Day",
-    desc: "≥ 5,000 years saved in a day.",
-    emoji: "🚀",
-    unlocked: (s) => Math.max(0, ...Object.values(s.byDayYears)) >= 5_000,
-  },
+  { id: "streak_10", name: "Ten-Day Streak", desc: "Scanned 10 days in a row.", emoji: "🔥", unlocked: (s) => s.streakBest >= 10 },
+  { id: "big_day", name: "Marathon Day", desc: "≥ 5,000 years saved in a day.", emoji: "🚀", unlocked: (s) => Math.max(0, ...Object.values(s.byDayYears)) >= 5_000 },
 ];
 
 // ---- UI bits ----
-function StatCard({
-  title,
-  value,
-  sub,
-}: {
-  title: string;
-  value: string;
-  sub?: string;
-}) {
+function StatCard({ title, value, sub }: { title: string; value: string; sub?: string }) {
   return (
     <div className="card p-4">
       <div className="text-sm text-neutral-500">{title}</div>
@@ -198,15 +134,7 @@ function StatCard({
   );
 }
 
-function BarRow({
-  label,
-  value,
-  max,
-}: {
-  label: string;
-  value: number;
-  max: number;
-}) {
+function BarRow({ label, value, max }: { label: string; value: number; max: number }) {
   const width = max > 0 ? `${(value / max) * 100}%` : "0%";
   return (
     <div className="py-2">
@@ -223,18 +151,12 @@ function BarRow({
 
 function Badge({ a, done }: { a: Achievement; done: boolean }) {
   return (
-    <div
-      className={`border rounded-2xl p-3 flex items-start gap-3 ${
-        done ? "bg-white" : "bg-neutral-50 opacity-70"
-      }`}
-    >
+    <div className={`border rounded-2xl p-3 flex items-start gap-3 ${done ? "bg-white" : "bg-neutral-50 opacity-70"}`}>
       <div className="text-2xl">{a.emoji}</div>
       <div className="min-w-0">
         <div className="font-medium">{a.name}</div>
         <div className="text-xs text-neutral-600">{a.desc}</div>
-        {!done && (
-          <div className="mt-1 text-[11px] text-neutral-500 italic">Locked</div>
-        )}
+        {!done && <div className="mt-1 text-[11px] text-neutral-500 italic">Locked</div>}
       </div>
     </div>
   );
@@ -269,45 +191,54 @@ export default function AchievementsPage() {
         const d = doc.data() as ScanDoc;
         const when: Date | null = d.ts?.toDate ? d.ts.toDate() : null;
 
-        // years: stored or computed from material
         const material = (d.material || "unknown").toLowerCase();
         const computed = scoreFor(material);
-        const years = d.years ?? Math.round(computed.years);
-        const bin = (d.binSuggested || computed.bin || "other").toLowerCase();
-        const label = (d.label || material).toLowerCase();
-        const pts = d.points ?? Math.round(years);
 
-        totalYears += years;
+        // Stored years or computed
+        const storedYears = d.years ?? Math.round(computed.years);
+
+        // Normalize bin names and collapse synonyms
+        const rawBin = (d.binSuggested || computed.bin || "other").toLowerCase();
+        const bin =
+          rawBin === "recycle" ? "recycling" :
+          rawBin === "trash" ? "landfill" :
+          rawBin;
+
+        const label = (d.label || material).toLowerCase();
+
+        // Landfill does NOT count towards "years saved"
+        const effectiveYears = bin === "landfill" ? 0 : storedYears;
+        const pts = bin === "landfill" ? 0 : (d.points ?? Math.round(storedYears));
+
+        totalYears += effectiveYears;
         totalPoints += pts;
 
-        byMaterialYears[material] = (byMaterialYears[material] || 0) + years;
-        byBinYears[bin] = (byBinYears[bin] || 0) + years;
+        byMaterialYears[material] = (byMaterialYears[material] || 0) + effectiveYears;
+
+        // Exclude landfill from By Bin breakdown
+        if (bin !== "landfill") {
+          byBinYears[bin] = (byBinYears[bin] || 0) + effectiveYears;
+          binSet.add(bin);
+        }
 
         if (when) {
           const dk = dayKey(when);
           const mk = monthKey(when);
-          byDayYears[dk] = (byDayYears[dk] || 0) + years;
-          byMonthYears[mk] = (byMonthYears[mk] || 0) + years;
+          byDayYears[dk] = (byDayYears[dk] || 0) + effectiveYears;
+          byMonthYears[mk] = (byMonthYears[mk] || 0) + effectiveYears;
           dayPresence.add(dk);
         }
 
         matSet.add(material);
-        binSet.add(bin);
         labelCounts[label] = (labelCounts[label] || 0) + 1;
       });
 
-      const bestDayKey =
-        Object.entries(byDayYears).sort((a, b) => b[1] - a[1])[0] || null;
-      const bestMonthKey =
-        Object.entries(byMonthYears).sort((a, b) => b[1] - a[1])[0] || null;
+      const bestDayKey = Object.entries(byDayYears).sort((a, b) => b[1] - a[1])[0] || null;
+      const bestMonthKey = Object.entries(byMonthYears).sort((a, b) => b[1] - a[1])[0] || null;
 
-      const mostScannedItem = Object.entries(labelCounts).sort(
-        (a, b) => b[1] - a[1]
-      )[0]?.[0];
+      const mostScannedItem = Object.entries(labelCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
 
-      const { current: streakCurrent, best: streakBest } = computeStreaks([
-        ...dayPresence,
-      ]);
+      const { current: streakCurrent, best: streakBest } = computeStreaks([...dayPresence]);
 
       const s: Stats = {
         totalYears,
@@ -321,12 +252,8 @@ export default function AchievementsPage() {
         uniqueBins: binSet,
         streakCurrent,
         streakBest,
-        bestDay: bestDayKey
-          ? { key: bestDayKey[0], years: bestDayKey[1] }
-          : null,
-        bestMonth: bestMonthKey
-          ? { key: bestMonthKey[0], years: bestMonthKey[1] }
-          : null,
+        bestDay: bestDayKey ? { key: bestDayKey[0], years: bestDayKey[1] } : null,
+        bestMonth: bestMonthKey ? { key: bestMonthKey[0], years: bestMonthKey[1] } : null,
       };
 
       setStats(s);
@@ -351,14 +278,11 @@ export default function AchievementsPage() {
     );
   }
 
-  const topMat = Object.entries(stats.byMaterialYears).sort(
-    (a, b) => b[1] - a[1]
-  )[0];
-  const topBin = Object.entries(stats.byBinYears).sort(
-    (a, b) => b[1] - a[1]
-  )[0];
+  const topMat = Object.entries(stats.byMaterialYears).sort((a, b) => b[1] - a[1])[0];
+  const topBin = Object.entries(stats.byBinYears).sort((a, b) => b[1] - a[1])[0];
 
-  const binOrder = ["recycle", "compost", "landfill", "ewaste", "other"];
+  // No landfill here
+  const binOrder = ["recycling", "compost", "special", "ewaste", "other"];
   const matOrder = ["plastic", "paper", "glass", "metal", "organic", "other"];
 
   const binMax = Math.max(0, ...Object.values(stats.byBinYears));
@@ -368,21 +292,10 @@ export default function AchievementsPage() {
     <section className="space-y-6">
       {/* Top stats */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard
-          title="Total Years Saved"
-          value={`${fmtInt(stats.totalYears)} yrs`}
-        />
+        <StatCard title="Total Years Saved" value={`${fmtInt(stats.totalYears)} yrs`} />
         <StatCard title="Total Points" value={`${fmtInt(stats.totalPoints)}`} />
-        <StatCard
-          title="Best Day"
-          value={stats.bestDay ? `${fmtInt(stats.bestDay.years)} yrs` : "—"}
-          sub={stats.bestDay?.key}
-        />
-        <StatCard
-          title="Best Month"
-          value={stats.bestMonth ? `${fmtInt(stats.bestMonth.years)} yrs` : "—"}
-          sub={stats.bestMonth?.key}
-        />
+        <StatCard title="Best Day" value={stats.bestDay ? `${fmtInt(stats.bestDay.years)} yrs` : "—"} sub={stats.bestDay?.key} />
+        <StatCard title="Best Month" value={stats.bestMonth ? `${fmtInt(stats.bestMonth.years)} yrs` : "—"} sub={stats.bestMonth?.key} />
       </div>
 
       {/* Breakdown by material */}
@@ -399,17 +312,12 @@ export default function AchievementsPage() {
           {matOrder
             .filter((k) => stats.byMaterialYears[k])
             .map((k) => (
-              <BarRow
-                key={k}
-                label={k}
-                value={stats.byMaterialYears[k]}
-                max={matMax}
-              />
+              <BarRow key={k} label={k} value={stats.byMaterialYears[k]} max={matMax} />
             ))}
         </div>
       </div>
 
-      {/* Breakdown by bin */}
+      {/* Breakdown by bin (landfill excluded) */}
       <div className="card p-4">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold">By Bin</h3>
@@ -423,12 +331,7 @@ export default function AchievementsPage() {
           {binOrder
             .filter((k) => stats.byBinYears[k])
             .map((k) => (
-              <BarRow
-                key={k}
-                label={k}
-                value={stats.byBinYears[k]}
-                max={binMax}
-              />
+              <BarRow key={k} label={k} value={stats.byBinYears[k]} max={binMax} />
             ))}
         </div>
       </div>
@@ -446,8 +349,7 @@ export default function AchievementsPage() {
         <div className="flex items-center justify-between">
           <h3 className="font-semibold">Achievements</h3>
           <span className="chip">
-            Streak: <b className="ml-1">{stats.streakCurrent}</b> (best{" "}
-            {stats.streakBest})
+            Streak: <b className="ml-1">{stats.streakCurrent}</b> (best {stats.streakBest})
           </span>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -461,9 +363,7 @@ export default function AchievementsPage() {
                     <ShareBadgeButton
                       emoji={a.emoji}
                       title={a.name}
-                      subtitle={
-                        /* e.g. */ `Total saved: ${stats.totalYears.toLocaleString()} yrs`
-                      }
+                      subtitle={`Total saved: ${stats.totalYears.toLocaleString()} yrs`}
                       fileName={`decomp-${a.id}.png`}
                     />
                   </div>

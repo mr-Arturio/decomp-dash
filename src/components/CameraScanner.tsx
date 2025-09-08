@@ -7,22 +7,11 @@ import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 
 import { aHashFromImageData } from "../lib/ahash";
 import { hammingHex } from "../lib/hamming";
-import { MATERIALS, labelToMaterial } from "../lib/materials";
-import { scoreFor } from "../lib/scoring";
 import { db, ensureAnonAuth } from "../lib/firebase";
+import { detectPrimaryROI, classify, mergeLabels } from "../lib/vision";
+import { mapWithApi, type MapResult } from "../lib/mapping";
 
 type BinTag = { teamId: string; binId: string };
-type Pred = { className: string; probability: number };
-
-type MapResult = {
-  material: string;
-  bin: string;
-  tip: string;
-  years: number;
-  risk_score?: number;
-  _mode?: "llm" | "heuristic";
-  _model?: string;
-};
 
 // DEMO FLAG: when true, QR code is not required
 const DEMO_NO_QR = process.env.NEXT_PUBLIC_DEMO_NO_QR === "1";
@@ -30,15 +19,6 @@ const DEMO_NO_QR = process.env.NEXT_PUBLIC_DEMO_NO_QR === "1";
 // loop settings
 const SCAN_INTERVAL_MS = 333; // ~3 fps
 const DETECT_WIDTH = 320; // downscale for motion/QR to reduce CPU
-
-// ---- cached MobileNet load (avoid cold starts every capture) ----
-let _mobilenetModel: any | null = null;
-async function getMobileNet() {
-  if (_mobilenetModel) return _mobilenetModel;
-  const mobilenet = await import("@tensorflow-models/mobilenet");
-  _mobilenetModel = await mobilenet.load();
-  return _mobilenetModel;
-}
 
 export default function CameraScanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -76,7 +56,6 @@ export default function CameraScanner() {
   >(new Map());
 
   useEffect(() => {
-    // stop when unmounting or tab becomes hidden
     const onVis = () => {
       if (document.hidden) stopSession();
     };
@@ -135,13 +114,12 @@ export default function CameraScanner() {
       v.srcObject = stream;
       await v.play();
 
-      // preload model in the background once the camera is live
-      getMobileNet().catch(() => {});
+      // warm up models
+      // Models are loaded lazily by vision utils when called
 
-      // In demo mode, prefill a fake tag and skip QR detection
       if (DEMO_NO_QR) setBinTag(getDemoTag());
 
-      // Start motion (and optionally QR) loop (~3 fps) on a small canvas
+      // motion (+ optional QR) loop
       if (detectTimerRef.current) clearInterval(detectTimerRef.current);
       detectTimerRef.current = setInterval(() => {
         const v2 = videoRef.current;
@@ -158,7 +136,7 @@ export default function CameraScanner() {
         ctx.drawImage(v2, 0, 0, w, h);
         const img = ctx.getImageData(0, 0, w, h);
 
-        // Motion delta (sampled grid @ downscale)
+        // motion
         const prev = prevFrameRef.current;
         if (prev && prev.data.length === img.data.length) {
           let diff = 0;
@@ -176,7 +154,7 @@ export default function CameraScanner() {
         prevFrameRef.current = img;
 
         if (!DEMO_NO_QR) {
-          // QR detect (demo mode skips this)
+          // QR detect
           const qr = jsQR(img.data, w, h);
           const now = Date.now();
           if (
@@ -198,7 +176,6 @@ export default function CameraScanner() {
         }
       }, SCAN_INTERVAL_MS);
 
-      // Auto-stop after 90s
       if (sessionTimerRef.current) clearTimeout(sessionTimerRef.current);
       sessionTimerRef.current = setTimeout(stopSession, 90_000);
     } catch (e: unknown) {
@@ -208,67 +185,7 @@ export default function CameraScanner() {
           ? e.message
           : "Failed to access camera. Check site permissions."
       );
-      // console.error("Camera access failed", e);
     }
-  }
-
-  async function classifyWithMobilenet(
-    canvas: HTMLCanvasElement
-  ): Promise<Pred[]> {
-    try {
-      const model = await getMobileNet();
-      const preds = await model.classify(canvas);
-      return preds as unknown as Pred[];
-    } catch {
-      // Fallback stub for offline/demo
-      return [{ className: "plastic bottle", probability: 0.9 }];
-    }
-  }
-
-  async function mapWithApi(
-    preds: Pred[],
-    recentCount: number,
-    delta: number,
-    conf: number
-  ): Promise<MapResult> {
-    try {
-      const r = await fetch("/api/map", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          labels: preds.map((p) => ({
-            name: p.className,
-            prob: p.probability,
-          })),
-          rules: MATERIALS,
-          meta: { recentCount, delta, conf },
-        }),
-      });
-      if (r.ok) {
-        const data = (await r.json()) as MapResult;
-
-        const modeHeader = r.headers.get("x-map-mode");
-        const parsedMode: MapResult["_mode"] =
-          modeHeader === "llm"
-            ? "llm"
-            : modeHeader === "heuristic"
-            ? "heuristic"
-            : "heuristic";
-        data._mode = parsedMode;
-
-        const modelHeader = r.headers.get("x-map-model");
-        data._model = modelHeader ?? "";
-
-        return data;
-      }
-    } catch {
-      // ignore -> fallback below
-    }
-    // Fallback (client-side heuristic)
-    const top = preds[0]?.className || "";
-    const material = labelToMaterial(top);
-    const { bin, years, tip } = scoreFor(material);
-    return { material, bin, tip, years, _mode: "heuristic", _model: "" };
   }
 
   async function captureAndRecord() {
@@ -324,14 +241,26 @@ export default function CameraScanner() {
         return;
       }
 
-      // Classify
-      const preds = await classifyWithMobilenet(canvas);
-      const predictedLabel = preds[0]?.className || "unknown";
-      const confidence = preds[0]?.probability ?? 0.5;
+      // --------- Detect + ROI crop, then classify ---------
+      const { roi, detections, primary } = await detectPrimaryROI(canvas);
+      const mobPreds = await classify(roi);
+
+      // Merge labels (detector first + synonyms, then MobileNet, then PAPER hint)
+      const labels = mergeLabels(detections, mobPreds);
+
+      // choose a user-facing label
+      const predictedLabel =
+        (primary?.class && primary.score > 0.55
+          ? primary.class
+          : mobPreds[0]?.className) || "unknown";
+      const confidence =
+        (primary?.class && primary.score > 0.55
+          ? primary.score
+          : mobPreds[0]?.probability) ?? 0.5;
 
       // Map via API (with fallback inside)
-      const mapped = await mapWithApi(
-        preds,
+      const mapped: MapResult = await mapWithApi(
+        labels,
         entry.hashes.length,
         motionDeltaRef.current || 0,
         confidence
@@ -368,7 +297,6 @@ export default function CameraScanner() {
 
       if ("vibrate" in navigator) {
         try {
-          // haptic feedback on success
           (navigator as any).vibrate?.(50);
         } catch {}
       }
@@ -403,11 +331,10 @@ export default function CameraScanner() {
             playsInline
             muted
           />
-          {/* keep canvases hidden */}
+          {/* hidden work canvases */}
           <canvas ref={captureCanvasRef} className="hidden" />
           <canvas ref={detectCanvasRef} className="hidden" />
 
-          {/* tighter overlays for the smaller box */}
           <div className="pointer-events-none absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-black/40 to-transparent" />
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/40 to-transparent" />
 
