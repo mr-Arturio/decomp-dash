@@ -272,6 +272,7 @@ export async function POST(req: NextRequest) {
         '{ "material": string, "bin": "recycling|compost|landfill|special", "tip": string, "years": number, "risk_score": number }',
         "No extra text. No code fences. No explanations.",
         "Be conservative: if unsure, choose stricter binning and say so in tip (<=140 chars).",
+        "Never describe or analyze people or pets — focus only on the item material.",
       ].join(" ");
 
       const user = [
@@ -294,6 +295,24 @@ export async function POST(req: NextRequest) {
         "- EXCEPTION: if there is a clear 'paper cup' or 'coffee cup' cue → treat as paper-cup (see subtypes).",
 
         "",
+        "DECORATIVE-IMAGE RULE (IGNORE PRINTED SUBJECTS):",
+        "- If labels describe a depicted subject likely printed on the item (e.g., 'elephant', 'person', 'flower', 'landscape', 'logo', 'illustration', 'drawing', 'sticker', 'cover art'), DO NOT infer the material from that subject.",
+        "- Prefer the substrate/material cues instead (e.g., notebook/book/page → material='paper').",
+        "- Example: labels ['elephant', 'book'] → PAPER; labels ['person', 'magazine'] → PAPER.",
+        "- If paper cues are present without 'cup' cues, treat material as 'paper' regardless of printed subjects.",
+
+        "",
+        "BACKGROUND DEBIASING:",
+        "- Deprioritize typical environment labels (person, face, hand, potted plant, plant, tree, keyboard, laptop, monitor, tv, chair, couch, shelf, refrigerator, bed) when a plausible item/material label is present (cup, bottle, jar, box, book, notebook, can, plate, foil, bag, wrapper, carton, paper, cardboard).",
+        "- If only background labels are present and no clear material cue is available → material='unknown'.",
+        "- Do not classify based on people/pets/animals (person, dog, cat, bird, horse, etc.).",
+
+        "",
+        "CAMERA GUIDANCE (for interpreting LABELS):",
+        "- Treat 'centered' and 'large' objects as more likely foreground; de-emphasize small/edge/background items.",
+        "- If labels indicate both a subject and a substrate (e.g., 'elephant' + 'book'), choose the substrate as the material.",
+
+        "",
         "CLASSIFICATION GUIDANCE (SYNONYMS & CUES):",
         "- plastic: PET/HDPE/LDPE/PP, water/soda bottle, cup, clamshell, yogurt tub, blister pack, straw, cutlery, plastic bag/film, shrink wrap, black plastic, polystyrene/Styrofoam, takeout lid.",
         "- metal: aluminum/tin/steel can, drink can, metal lid, CLEAN foil (ball it), foil tray, empty aerosol can.",
@@ -309,7 +328,7 @@ export async function POST(req: NextRequest) {
         "- Paper cups: usually plastic-lined; default material='paper' but bin='landfill' (or 'compost' ONLY if RULES explicitly accept certified compostable cups). Tip: 'Paper cups are plastic-lined.'",
         "- Cartons (Tetra Pak): paper+plastic(+aluminum). If RULES accept cartons → recycling; else unknown/landfill.",
         "- Plastic film & bags: usually NOT curbside; if RULES mention store drop-off → bin='special' (material='plastic'); else unknown/landfill.",
-        "- Foil vs metallized plastic: crumple test heuristic — true foil keeps shape (metal), metallized plastic springs back (landfill). If unsure → landfill.",
+        "- Foil vs metallized plastic: crumple test — true foil keeps shape (metal), metallized plastic springs back (landfill). If unsure → landfill.",
         "- Black plastic: often not sortable → unknown/landfill unless RULES accept.",
         "- Greasy/food-soiled paper/cardboard: NOT recycling. If local compost accepts food-soiled paper → compost; else landfill.",
         "- Batteries & bulbs: material='ewaste', bin='special' (never 'recycling').",
@@ -339,7 +358,7 @@ export async function POST(req: NextRequest) {
         "- If top-2 labels map to different bins and |p1 - p2| < 0.15 → choose stricter bin and mention uncertainty in tip.",
         "- When 'cup' appears without 'glass/ceramic/metal' cues, assume paper/lined cup → stricter (usually landfill) unless RULES accept.",
         "- 'menu', 'receipt', 'document', 'page', 'book', 'notebook' → paper (recycling) if clean & dry.",
-        "- For 'napkin', 'tissue', 'paper towel': likely NOT recycling. If RULES allow compost, use compost; else landfill. Use a tip.",
+        "- 'napkin', 'tissue', 'paper towel' → not recycling; compost if RULES allow, else landfill.",
         "- For 'foil' vs 'wrapper' uncertainty → landfill.",
         "- For 'pizza box': if 'grease' or food present implied → compost (if allowed) else landfill; otherwise recycle clean lid only.",
 
@@ -378,13 +397,16 @@ export async function POST(req: NextRequest) {
         "- Example 4 (battery):",
         '  Labels: [{"name":"battery","prob":0.77}]',
         '  → {"material":"ewaste","bin":"special","tip":"Take batteries to e-waste drop-off.","years":1000,"risk_score":0.0}',
+        "- Example 5 (decorated notebook):",
+        '  Labels: [{"name":"elephant","prob":0.71},{"name":"book","prob":0.44}]',
+        '  → {"material":"paper","bin":"recycling","tip":"Recycle clean paper; remove bindings if required.","years":2,"risk_score":0.1}',
 
         "",
         "INPUT:",
         `Labels: ${JSON.stringify(labelsForModel)}`,
         `Rules: ${JSON.stringify(rulesObj)}`,
         `Meta: ${JSON.stringify(metaObj)}`,
-      ].join("\n");
+      ].join("\\n");
 
       const responseFormat: ChatCompletionCreateParams["response_format"] = {
         type: "json_object",
@@ -484,7 +506,7 @@ function heuristic(
     });
   }
 
-  let material: AllowedMaterial | "unknown" =
+  const material: AllowedMaterial | "unknown" =
     inferred === "unknown" ? "unknown" : inferred;
 
   let bin: Bin;
@@ -513,6 +535,20 @@ function heuristic(
           : "Rinse and recycle.")
     );
   }
+
+  // Clamp to reasonable minimums to avoid 0 yrs cases from rules
+  const MIN_YEARS: Record<string, number> = {
+    plastic: 450,
+    metal: 50,
+    glass: 1,
+    paper: 2,
+    cardboard: 2,
+    organic: 1,
+    ewaste: 1000,
+    unknown: 50,
+  };
+  const minY = MIN_YEARS[material] ?? 1;
+  if (!Number.isFinite(years) || years < minY) years = minY;
 
   const json: Decision = {
     material,

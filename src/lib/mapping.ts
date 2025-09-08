@@ -28,19 +28,28 @@ export async function mapWithApi(
         meta: { recentCount, delta, conf },
       }),
     });
+
     if (r.ok) {
       const data = (await r.json()) as MapResult;
+
       const modeHeader = r.headers.get("x-map-mode");
       const parsedMode: MapResult["_mode"] =
         modeHeader === "llm" ? "llm" : "heuristic";
-      (data as any)._mode = parsedMode;
-      (data as any)._model = r.headers.get("x-map-model") ?? "";
-      return data;
+
+      const modelHeader = r.headers.get("x-map-model") ?? "";
+
+      // Return a fully typed object without `any`
+      return { ...data, _mode: parsedMode, _model: modelHeader };
     }
-  } catch {}
+  } catch {
+    // ignore network/parse errors -> fallback below
+  }
+
+  // Fallback (client-side heuristic)
   const top = labels[0]?.className || "";
   const material = labelToMaterial(top);
   const { bin, years, tip } = scoreFor(material);
+
   return {
     material,
     bin: bin as MapResult["bin"],

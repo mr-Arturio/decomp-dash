@@ -8,10 +8,31 @@ import { addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { aHashFromImageData } from "../lib/ahash";
 import { hammingHex } from "../lib/hamming";
 import { db, ensureAnonAuth } from "../lib/firebase";
-import { detectPrimaryROI, classify, mergeLabels } from "../lib/vision";
+import {
+  detectPrimaryROI,
+  classify,
+  mergeLabels,
+  getCoco,
+} from "../lib/vision";
 import { mapWithApi, type MapResult } from "../lib/mapping";
 
 type BinTag = { teamId: string; binId: string };
+
+// Vendor-extended media types (progressive enhancement)
+type VendorTrackCapabilities = MediaTrackCapabilities & {
+  focusMode?: string[];
+  exposureMode?: string[];
+  whiteBalanceMode?: string[];
+  zoom?: { min: number; max: number; step?: number };
+  pointsOfInterest?: boolean;
+};
+type VendorTrackConstraintSet = MediaTrackConstraintSet & {
+  focusMode?: string;
+  exposureMode?: string;
+  whiteBalanceMode?: string;
+  zoom?: number;
+  pointsOfInterest?: { x: number; y: number }[];
+};
 
 // DEMO FLAG: when true, QR code is not required
 const DEMO_NO_QR = process.env.NEXT_PUBLIC_DEMO_NO_QR === "1";
@@ -19,11 +40,33 @@ const DEMO_NO_QR = process.env.NEXT_PUBLIC_DEMO_NO_QR === "1";
 // loop settings
 const SCAN_INTERVAL_MS = 333; // ~3 fps
 const DETECT_WIDTH = 320; // downscale for motion/QR to reduce CPU
+const DETECT_EVERY_MS = 650; // live-outline cadence
+
+type Box = {
+  x: number; // 0..1
+  y: number; // 0..1
+  w: number; // 0..1
+  h: number; // 0..1
+  label?: string;
+  score?: number;
+} | null;
 
 export default function CameraScanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const captureCanvasRef = useRef<HTMLCanvasElement | null>(null); // full-res capture
   const detectCanvasRef = useRef<HTMLCanvasElement | null>(null); // downscaled loop
+
+  // NEW: UI/track control refs
+  const camBoxRef = useRef<HTMLDivElement | null>(null);
+  const viewRef = useRef<HTMLDivElement | null>(null);
+  const videoTrackRef = useRef<MediaStreamTrack | null>(null);
+  const zoomCapsRef = useRef<{ min: number; max: number; step: number } | null>(
+    null
+  );
+  const pinchRef = useRef<{ base: number; start: number } | null>(null);
+  const lastDetAtRef = useRef(0);
+  const detectBusyRef = useRef(false);
+  const [box, setBox] = useState<Box>(null);
 
   const [sessionActive, setSessionActive] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -55,6 +98,81 @@ export default function CameraScanner() {
     Map<string, { hashes: string[]; times: number[] }>
   >(new Map());
 
+  async function enableTrackControls(stream: MediaStream) {
+    const track = stream.getVideoTracks()[0];
+    videoTrackRef.current = track;
+
+    const caps =
+      (track.getCapabilities?.() as VendorTrackCapabilities | undefined) ||
+      ({} as VendorTrackCapabilities);
+    const adv: VendorTrackConstraintSet[] = [];
+
+    if (caps.focusMode && caps.focusMode.includes("continuous")) {
+      adv.push({ focusMode: "continuous" });
+    }
+    if (caps.exposureMode && caps.exposureMode.includes("continuous")) {
+      adv.push({ exposureMode: "continuous" });
+    }
+    if (caps.whiteBalanceMode && caps.whiteBalanceMode.includes("continuous")) {
+      adv.push({ whiteBalanceMode: "continuous" });
+    }
+    if (caps.zoom && typeof caps.zoom.min === "number") {
+      zoomCapsRef.current = {
+        min: caps.zoom.min,
+        max: caps.zoom.max,
+        step: caps.zoom.step || 0.1,
+      };
+    }
+
+    if (adv.length) {
+      try {
+        await track.applyConstraints({
+          advanced: adv,
+        } as MediaTrackConstraints);
+      } catch {}
+    }
+  }
+
+  async function focusAt(clientX: number, clientY: number) {
+    const track = videoTrackRef.current;
+    if (!track) return;
+    const caps =
+      (track.getCapabilities?.() as VendorTrackCapabilities | undefined) ||
+      ({} as VendorTrackCapabilities);
+    if (!caps.pointsOfInterest) return;
+
+    const box = camBoxRef.current?.getBoundingClientRect();
+    if (!box) return;
+    const x = (clientX - box.left) / box.width;
+    const y = (clientY - box.top) / box.height;
+
+    try {
+      const constraints: MediaTrackConstraints = {
+        advanced: [
+          {
+            pointsOfInterest: [{ x, y }],
+          } as unknown as VendorTrackConstraintSet,
+        ],
+      };
+      await track.applyConstraints(constraints);
+    } catch {}
+  }
+
+  async function setZoom(rel: number) {
+    const caps = zoomCapsRef.current;
+    const track = videoTrackRef.current;
+    if (!track || !caps) return;
+    const cur = track.getSettings?.().zoom as number | undefined;
+    const base = typeof cur === "number" ? cur : caps.min;
+    const next = Math.max(caps.min, Math.min(caps.max, base * rel));
+    try {
+      const constraintsZoom = {
+        advanced: [{ zoom: next } as VendorTrackConstraintSet],
+      } as unknown as MediaTrackConstraints;
+      await track.applyConstraints(constraintsZoom);
+    } catch {}
+  }
+
   useEffect(() => {
     const onVis = () => {
       if (document.hidden) stopSession();
@@ -64,11 +182,11 @@ export default function CameraScanner() {
       document.removeEventListener("visibilitychange", onVis);
       stopSession();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function stopSession() {
     setSessionActive(false);
+    setBox(null);
     if (!DEMO_NO_QR) setBinTag(null);
     if (detectTimerRef.current) {
       clearInterval(detectTimerRef.current);
@@ -80,6 +198,7 @@ export default function CameraScanner() {
     }
     const v = videoRef.current;
     const stream = (v?.srcObject as MediaStream | null) || null;
+    // optional: detach listeners if needed; kept lightweight for demo
     if (stream) stream.getTracks().forEach((t) => t.stop());
     if (v) v.srcObject = null;
   }
@@ -113,6 +232,46 @@ export default function CameraScanner() {
       if (!v) return;
       v.srcObject = stream;
       await v.play();
+
+      // Enable autofocus/zoom controls where supported
+      await enableTrackControls(stream);
+
+      // lightweight tap & pinch listeners
+      const el = camBoxRef.current;
+      if (el) {
+        el.addEventListener("click", (e) =>
+          focusAt((e as MouseEvent).clientX, (e as MouseEvent).clientY)
+        );
+        el.addEventListener(
+          "touchstart",
+          (e) => {
+            const te = e as TouchEvent;
+            if (te.touches.length === 2) {
+              const dx = te.touches[0].clientX - te.touches[1].clientX;
+              const dy = te.touches[0].clientY - te.touches[1].clientY;
+              pinchRef.current = { base: Math.hypot(dx, dy), start: 1 };
+            }
+          },
+          { passive: true }
+        );
+        el.addEventListener(
+          "touchmove",
+          (e) => {
+            const te = e as TouchEvent;
+            if (te.touches.length === 2 && pinchRef.current) {
+              const dx = te.touches[0].clientX - te.touches[1].clientX;
+              const dy = te.touches[0].clientY - te.touches[1].clientY;
+              const dist = Math.hypot(dx, dy);
+              const rel = Math.max(
+                0.5,
+                Math.min(2, dist / pinchRef.current.base)
+              );
+              setZoom(rel);
+            }
+          },
+          { passive: true }
+        );
+      }
 
       // warm up models
       // Models are loaded lazily by vision utils when called
@@ -174,6 +333,50 @@ export default function CameraScanner() {
             if (now - lastQRSeenAtRef.current > 1500) setBinTag(null);
           }
         }
+
+        // Live detection for green outline (throttled)
+        const nowTs = Date.now();
+        if (
+          nowTs - lastDetAtRef.current > DETECT_EVERY_MS &&
+          !detectBusyRef.current
+        ) {
+          detectBusyRef.current = true;
+          (async () => {
+            try {
+              const model = await getCoco();
+              const dets = await model.detect(c as HTMLCanvasElement);
+              type MiniDet = {
+                class: string;
+                score: number;
+                bbox: [number, number, number, number];
+              };
+              const sorted = (dets as unknown as MiniDet[]).sort(
+                (a, b) => (b.score || 0) - (a.score || 0)
+              );
+              const best = sorted[0];
+              const minArea = w * h * 0.06;
+              const area = best ? best.bbox[2] * best.bbox[3] : 0;
+
+              if (!best || area < minArea) {
+                setBox(null);
+              } else {
+                const [bx, by, bw, bh] = best.bbox;
+                setBox({
+                  x: bx / w,
+                  y: by / h,
+                  w: bw / w,
+                  h: bh / h,
+                  label: best.class,
+                  score: best.score,
+                });
+              }
+            } catch {
+            } finally {
+              lastDetAtRef.current = Date.now();
+              detectBusyRef.current = false;
+            }
+          })();
+        }
       }, SCAN_INTERVAL_MS);
 
       if (sessionTimerRef.current) clearTimeout(sessionTimerRef.current);
@@ -211,12 +414,38 @@ export default function CameraScanner() {
     try {
       const video = videoRef.current;
       const canvas = captureCanvasRef.current;
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
       const ctx = canvas.getContext("2d");
-      if (!ctx) return;
+      if (!video || !ctx) return;
 
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      // Prefer ImageCapture.grabFrame() (sharper than drawing <video>)
+      let bitmap: ImageBitmap | null = null;
+      try {
+        const stream = video.srcObject as MediaStream | null;
+        const track = stream?.getVideoTracks?.()[0];
+        if (track && "ImageCapture" in window) {
+          type ImageCaptureCtor = new (t: MediaStreamTrack) => {
+            grabFrame(): Promise<ImageBitmap>;
+          };
+          const icCtor = (
+            window as unknown as { ImageCapture?: ImageCaptureCtor }
+          ).ImageCapture;
+          if (icCtor) {
+            const ic = new icCtor(track);
+            bitmap = await ic.grabFrame();
+          }
+        }
+      } catch {}
+
+      if (bitmap) {
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        ctx.drawImage(bitmap, 0, 0);
+      } else {
+        // fallback
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      }
       const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const ahash = aHashFromImageData(img);
 
@@ -236,7 +465,7 @@ export default function CameraScanner() {
       // Per-bin per-hour cap = 6
       const now = Date.now();
       entry.times = entry.times.filter((t) => now - t < 60 * 60 * 1000);
-      if (entry.times.length >= 6) {
+      if (entry.times.length >= 10) {
         alert("Hourly capture limit reached for this bin.");
         return;
       }
@@ -269,7 +498,8 @@ export default function CameraScanner() {
       const material = mapped.material;
       const { bin, years, tip } = mapped;
       const risk = Math.max(0, Math.min(1, mapped.risk_score ?? 0));
-      const points = Math.round(Math.round(years) * (1 - 0.5 * risk));
+      const yearsRounded = Math.max(1, Math.round(years));
+      const points = Math.max(1, Math.round(yearsRounded * (1 - 0.5 * risk)));
 
       const uid = await ensureAnonAuth();
       await addDoc(collection(db, "scans"), {
@@ -281,7 +511,7 @@ export default function CameraScanner() {
         material,
         confidence,
         binSuggested: bin,
-        years: Math.round(years),
+        years: yearsRounded,
         ahash,
         points,
         llmMode: mapped._mode || "heuristic",
@@ -297,7 +527,11 @@ export default function CameraScanner() {
 
       if ("vibrate" in navigator) {
         try {
-          (navigator as any).vibrate?.(50);
+          (
+            navigator as Navigator & {
+              vibrate?: (pattern: number | number[]) => boolean;
+            }
+          ).vibrate?.(50);
         } catch {}
       }
 
@@ -305,7 +539,7 @@ export default function CameraScanner() {
         label: predictedLabel,
         material,
         bin,
-        years,
+        years: yearsRounded,
         points,
         ahash,
         confidence,
@@ -324,7 +558,7 @@ export default function CameraScanner() {
   return (
     <div className="space-y-3">
       <div className="card mx-auto w-48 sm:w-64 md:w-96 overflow-hidden">
-        <div className="relative aspect-square bg-neutral-900">
+        <div ref={viewRef} className="relative aspect-square bg-neutral-900">
           <video
             ref={videoRef}
             className="absolute inset-0 h-full w-full object-contain"
@@ -334,6 +568,70 @@ export default function CameraScanner() {
           {/* hidden work canvases */}
           <canvas ref={captureCanvasRef} className="hidden" />
           <canvas ref={detectCanvasRef} className="hidden" />
+
+          {/* GREEN OUTLINE OVERLAY */}
+          {box &&
+            viewRef.current &&
+            videoRef.current &&
+            (() => {
+              const containerW = viewRef.current!.clientWidth;
+              const containerH = viewRef.current!.clientHeight;
+              const vW = videoRef.current!.videoWidth || 640;
+              const vH = videoRef.current!.videoHeight || 480;
+              const videoAR = vW / vH;
+              const containerAR = containerW / containerH;
+
+              let vw: number, vh: number, vx: number, vy: number;
+              if (videoAR > containerAR) {
+                vw = containerW;
+                vh = containerW / videoAR;
+                vx = 0;
+                vy = (containerH - vh) / 2;
+              } else {
+                vh = containerH;
+                vw = containerH * videoAR;
+                vy = 0;
+                vx = (containerW - vw) / 2;
+              }
+
+              const left = vx + box!.x * vw;
+              const top = vy + box!.y * vh;
+              const width = box!.w * vw;
+              const height = box!.h * vh;
+
+              return (
+                <div className="absolute inset-0 pointer-events-none">
+                  <div
+                    className="absolute border-2 rounded-md"
+                    style={{
+                      left,
+                      top,
+                      width,
+                      height,
+                      borderColor: "rgb(16,185,129)",
+                      boxShadow:
+                        "0 0 0 2px rgba(16,185,129,0.45) inset, 0 0 8px rgba(16,185,129,0.35)",
+                    }}
+                  />
+                  {box!.label && (
+                    <div
+                      className="absolute px-2 py-0.5 text-xs font-medium rounded-md"
+                      style={{
+                        left,
+                        top: Math.max(0, top - 22),
+                        background: "rgba(16,185,129,0.9)",
+                        color: "white",
+                      }}
+                    >
+                      {box!.label}
+                      {typeof box!.score === "number"
+                        ? ` · ${(box!.score * 100) | 0}%`
+                        : ""}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
           <div className="pointer-events-none absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-black/40 to-transparent" />
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/40 to-transparent" />
