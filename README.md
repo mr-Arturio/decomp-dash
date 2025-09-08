@@ -1,3 +1,4 @@
+Created for Ottawa 1-day AI Hackathon
 # Decomp Dash ♻️
 
 _Gamified recycling with streaks, badges, and leaderboards._
@@ -284,10 +285,3 @@ Deploy to Vercel/Netlify/Render as a standard Next.js app (remember to add your 
 ---
 
 ## License
-
-
----
-
-## Credits
-
-Built with ❤️ for hackathons and communities who want to make recycling **simple, social, and sticky**.
